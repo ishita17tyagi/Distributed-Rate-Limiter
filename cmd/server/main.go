@@ -1,9 +1,11 @@
 package main
 
 import (
-	"fmt"
 	"log"
+	"net/http"
+	"time"
 
+	"distributed-rate-limiter/internal/api"
 	"distributed-rate-limiter/internal/config"
 )
 
@@ -13,8 +15,19 @@ func main() {
 		log.Fatalf("load config: %v", err)
 	}
 
-	fmt.Printf("server_port=%s\n", cfg.ServerPort)
-	fmt.Printf("redis_addr=%s\n", cfg.RedisAddr)
-	fmt.Printf("default_rate_limit=%d\n", cfg.DefaultRateLimit)
-	fmt.Printf("rate_limit_window=%s\n", cfg.RateLimitWindow)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", api.HealthCheck)
+
+	server := &http.Server{
+		Addr:         ":" + cfg.ServerPort,
+		Handler:      api.RequestLogger(mux),
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	log.Printf("server listening on %s", server.Addr)
+	if err := server.ListenAndServe(); err != nil {
+		log.Fatalf("server error: %v", err)
+	}
 }
