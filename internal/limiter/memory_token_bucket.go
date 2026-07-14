@@ -2,42 +2,28 @@ package limiter
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"distributed-rate-limiter/internal/logger"
 )
 
-// Define the interface here to avoid import cycles!
 type Store interface {
 	Get(key string) (*Bucket, error)
 	Save(key string, bucket *Bucket) error
 }
 
 type MemoryTokenBucket struct {
-	mu sync.Mutex
-
+	// Global mutex REMOVED. We now rely on individual Bucket mutexes.
 	store Store
-
-	capacity   float64
-	refillRate float64
 }
 
-func NewMemoryTokenBucket(
-	store Store,
-	capacity int,
-	window time.Duration,
-) *MemoryTokenBucket {
-	refillRate := float64(capacity) / window.Seconds()
-
+func NewMemoryTokenBucket(store Store) *MemoryTokenBucket {
 	return &MemoryTokenBucket{
-		store:      store,
-		capacity:   float64(capacity),
-		refillRate: refillRate,
+		store: store,
 	}
 }
 
-func (tb *MemoryTokenBucket) getBucket(key string) (*Bucket, error) {
+func (tb *MemoryTokenBucket) getBucket(key string, capacity float64) (*Bucket, error) {
 	bucket, err := tb.store.Get(key)
 	if err != nil {
 		return nil, err
@@ -45,29 +31,29 @@ func (tb *MemoryTokenBucket) getBucket(key string) (*Bucket, error) {
 
 	if bucket == nil {
 		bucket = &Bucket{
-			Tokens:     tb.capacity,
+			Tokens:     capacity,
 			LastRefill: time.Now(),
 		}
-
 		if err := tb.store.Save(key, bucket); err != nil {
 			return nil, err
 		}
 	}
-
 	return bucket, nil
 }
 
-func (tb *MemoryTokenBucket) refill(bucket *Bucket) {
+func (tb *MemoryTokenBucket) refill(bucket *Bucket, capacity float64, refillRate float64) {
 	now := time.Now()
-
 	elapsed := now.Sub(bucket.LastRefill).Seconds()
-
-	bucket.Tokens += elapsed * tb.refillRate
-
-	if bucket.Tokens > tb.capacity {
-		bucket.Tokens = tb.capacity
+	
+	if elapsed < 0 {
+		elapsed = 0 // Clock skew safety
 	}
 
+	bucket.Tokens += elapsed * refillRate
+
+	if bucket.Tokens > capacity {
+		bucket.Tokens = capacity
+	}
 	bucket.LastRefill = now
 }
 
@@ -76,35 +62,31 @@ func (tb *MemoryTokenBucket) consume(bucket *Bucket) bool {
 		bucket.Tokens--
 		return true
 	}
-
 	return false
 }
 
-func (tb *MemoryTokenBucket) Allow(ctx context.Context, key string) (*Result, error) {
-	_ = ctx // Used later
+func (tb *MemoryTokenBucket) Allow(ctx context.Context, key string, capacity int, window time.Duration) (*Result, error) {
+	capFloat := float64(capacity)
+	refillRate := capFloat / window.Seconds()
 
-	tb.mu.Lock()
-	defer tb.mu.Unlock()
-
-	bucket, err := tb.getBucket(key)
+	bucket, err := tb.getBucket(key, capFloat)
 	if err != nil {
 		return nil, err
 	}
 
-	tb.refill(bucket)
+	// Lock ONLY this specific user's bucket
+	bucket.mu.Lock()
+	defer bucket.mu.Unlock()
 
+	tb.refill(bucket, capFloat, refillRate)
 	allowed := tb.consume(bucket)
 
-	logger.Log.Info(
-		"rate limit check",
+	logger.Log.Debug( // Changed to Debug to prevent log spam during failover
+		"memory rate limit check (fallback)",
 		"user", key,
 		"allowed", allowed,
 		"remaining", int(bucket.Tokens),
 	)
-
-	if err := tb.store.Save(key, bucket); err != nil {
-		return nil, err
-	}
 
 	result := &Result{
 		Allowed:    allowed,
@@ -114,13 +96,7 @@ func (tb *MemoryTokenBucket) Allow(ctx context.Context, key string) (*Result, er
 
 	if !allowed {
 		missingTokens := 1 - bucket.Tokens
-		result.RetryAfter = int64(missingTokens / tb.refillRate)
-
-		logger.Log.Warn(
-			"rate limit exceeded",
-			"user", key,
-			"retry_after", result.RetryAfter,
-		)
+		result.RetryAfter = int64(missingTokens / refillRate)
 	}
 
 	return result, nil

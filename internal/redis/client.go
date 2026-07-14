@@ -8,7 +8,7 @@ import (
 )
 
 type Client struct {
-	rdb *redis.Client // Unexported, enforcing encapsulation
+	RDB *redis.Client
 }
 
 func New(addr string) *Client {
@@ -19,44 +19,8 @@ func New(addr string) *Client {
 		ReadTimeout:  3 * time.Second,
 		WriteTimeout: 3 * time.Second,
 	})
-
-	return &Client{
-		rdb: rdb,
-	}
+	return &Client{RDB: rdb}
 }
 
-func (c *Client) Ping(ctx context.Context) error {
-	return c.rdb.Ping(ctx).Err()
-}
-
-func (c *Client) Close() error {
-	return c.rdb.Close()
-}
-
-func (c *Client) Get(ctx context.Context, key string) (string, error) {
-	result, err := c.rdb.Get(ctx, key).Result()
-
-	if err == redis.Nil {
-		return "", nil
-	}
-
-	if err != nil {
-		return "", err
-	}
-
-	return result, nil
-}
-
-func (c *Client) Set(
-	ctx context.Context,
-	key string,
-	value interface{},
-	expiration time.Duration,
-) error {
-	return c.rdb.Set(
-		ctx,
-		key,
-		value,
-		expiration,
-	).Err()
-}
+func (c *Client) Ping(ctx context.Context) error { return c.RDB.Ping(ctx).Err() }
+func (c *Client) Close() error                   { return c.RDB.Close() }

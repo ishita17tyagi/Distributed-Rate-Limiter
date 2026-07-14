@@ -1,0 +1,10 @@
+{
+  "free": {
+    "capacity": 10,
+    "window": "1m"
+  },
+  "premium": {
+    "capacity": 100,
+    "window": "1m"
+  }
+}

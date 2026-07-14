@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -9,43 +10,63 @@ import (
 	"time"
 )
 
+type ClientLimit struct {
+	Capacity int
+	Window   time.Duration // Changed from string to parsed Duration
+}
+
 type Config struct {
 	ServerPort       string
 	RedisAddr        string
+	RedisFailureMode string
 	DefaultRateLimit int
 	RateLimitWindow  time.Duration
+	ClientLimits     map[string]ClientLimit
 }
 
 func Load() (*Config, error) {
-	if err := loadDotEnv(".env"); err != nil {
-		return nil, err
-	}
+	_ = loadDotEnv(".env")
 
-	defaultRateLimit, err := getEnvInt("DEFAULT_RATE_LIMIT", 10)
-	if err != nil {
-		return nil, err
-	}
+	defaultLimit, _ := getEnvInt("DEFAULT_RATE_LIMIT", 10)
+	window, _ := getEnvDuration("RATE_LIMIT_WINDOW", time.Minute)
 
-	rateLimitWindow, err := getEnvDuration("RATE_LIMIT_WINDOW", time.Minute)
-	if err != nil {
-		return nil, err
+	limits := make(map[string]ClientLimit)
+	data, err := os.ReadFile("client_limits.json")
+	if err == nil {
+		// Temporary struct to decode JSON strings
+		type rawLimit struct {
+			Capacity int    `json:"capacity"`
+			Window   string `json:"window"`
+		}
+		rawLimits := make(map[string]rawLimit)
+		if err := json.Unmarshal(data, &rawLimits); err == nil {
+			for key, val := range rawLimits {
+				parsedWindow, err := time.ParseDuration(val.Window)
+				if err == nil {
+					limits[key] = ClientLimit{
+						Capacity: val.Capacity,
+						Window:   parsedWindow,
+					}
+				}
+			}
+		}
 	}
 
 	return &Config{
 		ServerPort:       getEnv("PORT", "8080"),
 		RedisAddr:        getEnv("REDIS_ADDR", "localhost:6379"),
-		DefaultRateLimit: defaultRateLimit,
-		RateLimitWindow:  rateLimitWindow,
+		RedisFailureMode: getEnv("REDIS_FAILURE_MODE", "memory"),
+		DefaultRateLimit: defaultLimit,
+		RateLimitWindow:  window,
+		ClientLimits:     limits,
 	}, nil
 }
 
 func getEnv(key, fallback string) string {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback
+	if v := os.Getenv(key); v != "" {
+		return v
 	}
-
-	return value
+	return fallback
 }
 
 func getEnvInt(key string, fallback int) (int, error) {
@@ -53,12 +74,10 @@ func getEnvInt(key string, fallback int) (int, error) {
 	if raw == "" {
 		return fallback, nil
 	}
-
 	value, err := strconv.Atoi(raw)
 	if err != nil {
 		return 0, fmt.Errorf("invalid %s: %w", key, err)
 	}
-
 	return value, nil
 }
 
@@ -67,12 +86,10 @@ func getEnvDuration(key string, fallback time.Duration) (time.Duration, error) {
 	if raw == "" {
 		return fallback, nil
 	}
-
 	value, err := time.ParseDuration(raw)
 	if err != nil {
 		return 0, fmt.Errorf("invalid %s: %w", key, err)
 	}
-
 	return value, nil
 }
 
@@ -82,7 +99,6 @@ func loadDotEnv(path string) error {
 		if os.IsNotExist(err) {
 			return nil
 		}
-
 		return fmt.Errorf("open %s: %w", path, err)
 	}
 	defer file.Close()
@@ -93,28 +109,15 @@ func loadDotEnv(path string) error {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-
 		key, value, ok := strings.Cut(line, "=")
 		if !ok {
-			return fmt.Errorf("invalid env line %q", line)
+			continue
 		}
-
 		key = strings.TrimSpace(key)
 		value = strings.Trim(strings.TrimSpace(value), `"'`)
-		if key == "" {
-			return fmt.Errorf("invalid empty env key in %s", path)
-		}
-
 		if _, exists := os.LookupEnv(key); !exists {
-			if err := os.Setenv(key, value); err != nil {
-				return fmt.Errorf("set %s: %w", key, err)
-			}
+			os.Setenv(key, value)
 		}
 	}
-
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("read %s: %w", path, err)
-	}
-
 	return nil
 }
