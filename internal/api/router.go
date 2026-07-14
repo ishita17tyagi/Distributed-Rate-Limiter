@@ -5,15 +5,15 @@ import (
 )
 
 func NewRouter(rateLimiter *RateLimitMiddleware) *http.ServeMux {
-
 	mux := http.NewServeMux()
 
-	mux.Handle(
-		"/health",
+	handler := LoggingMiddleware(
 		rateLimiter.Handler(
 			http.HandlerFunc(HealthHandler),
 		),
 	)
+
+	mux.Handle("/health", handler)
 
 	return mux
 }

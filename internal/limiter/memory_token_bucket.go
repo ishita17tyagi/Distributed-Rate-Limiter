@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"distributed-rate-limiter/internal/logger"
 )
 
 // Define the interface here to avoid import cycles!
@@ -22,7 +24,7 @@ type MemoryTokenBucket struct {
 }
 
 func NewMemoryTokenBucket(
-	store Store, // <-- Fixed: Changed from storage.BucketStore to Store
+	store Store,
 	capacity int,
 	window time.Duration,
 ) *MemoryTokenBucket {
@@ -93,6 +95,13 @@ func (tb *MemoryTokenBucket) Allow(ctx context.Context, key string) (*Result, er
 
 	allowed := tb.consume(bucket)
 
+	logger.Log.Info(
+		"rate limit check",
+		"user", key,
+		"allowed", allowed,
+		"remaining", int(bucket.Tokens),
+	)
+
 	if err := tb.store.Save(key, bucket); err != nil {
 		return nil, err
 	}
@@ -106,6 +115,12 @@ func (tb *MemoryTokenBucket) Allow(ctx context.Context, key string) (*Result, er
 	if !allowed {
 		missingTokens := 1 - bucket.Tokens
 		result.RetryAfter = int64(missingTokens / tb.refillRate)
+
+		logger.Log.Warn(
+			"rate limit exceeded",
+			"user", key,
+			"retry_after", result.RetryAfter,
+		)
 	}
 
 	return result, nil

@@ -12,6 +12,7 @@ import (
 	"distributed-rate-limiter/internal/api"
 	"distributed-rate-limiter/internal/config"
 	"distributed-rate-limiter/internal/limiter"
+	"distributed-rate-limiter/internal/logger"
 	"distributed-rate-limiter/internal/redis"
 	"distributed-rate-limiter/internal/server"
 	"distributed-rate-limiter/internal/storage"
@@ -23,6 +24,9 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// Initialize structured logger
+	logger.Init()
+
 	redisClient := redis.New(cfg.RedisAddr)
 
 	// Startup context for Redis connection
@@ -30,17 +34,18 @@ func main() {
 	defer cancel()
 
 	if err := redisClient.Ping(ctx); err != nil {
-		log.Fatalf("Redis connection failed: %v", err)
+		logger.Log.Error("Redis connection failed", "error", err)
+		os.Exit(1)
 	}
 
-	log.Println("✅ Connected to Redis")
+	logger.Log.Info("✅ Connected to Redis")
 	defer redisClient.Close()
 
 	// Initialize the Redis Store using our connected client
 	redisStore := storage.NewRedisStore(redisClient)
 
 	// Initialize the Token Bucket with the Redis Store injected
-	tokenBucket := limiter.NewMemoryTokenBucket( // <-- Fixed: Removed the double (( parenthesis here
+	tokenBucket := limiter.NewMemoryTokenBucket(
 		redisStore,
 		cfg.DefaultRateLimit,
 		cfg.RateLimitWindow,
@@ -56,10 +61,14 @@ func main() {
 
 	// Start HTTP server in a goroutine
 	go func() {
-		log.Printf("🚀 Server listening on :%s", cfg.ServerPort)
+		logger.Log.Info(
+			"server starting",
+			"port", cfg.ServerPort,
+		)
 
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatal(err)
+			logger.Log.Error("Server error", "error", err)
+			os.Exit(1)
 		}
 	}()
 
@@ -72,7 +81,7 @@ func main() {
 	// Wait until a signal arrives
 	<-stop
 
-	log.Println("Shutdown signal received...")
+	logger.Log.Info("Shutdown signal received...")
 
 	// Give existing requests time to finish using a new context
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -80,8 +89,9 @@ func main() {
 
 	// Gracefully stop the server
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Fatal(err)
+		logger.Log.Error("Server shutdown failed", "error", err)
+		os.Exit(1)
 	}
 
-	log.Println("Server stopped gracefully.")
+	logger.Log.Info("Server stopped gracefully.")
 }
