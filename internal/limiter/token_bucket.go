@@ -6,37 +6,53 @@ import (
 	"time"
 )
 
+// Define the interface here to avoid import cycles!
+type Store interface {
+	Get(key string) (*Bucket, error)
+	Save(key string, bucket *Bucket) error
+}
+
 type TokenBucket struct {
 	mu sync.Mutex
 
-	buckets map[string]*Bucket
+	store Store
 
 	capacity   float64
 	refillRate float64
 }
 
-func NewTokenBucket(capacity int, window time.Duration) *TokenBucket {
+func NewTokenBucket(
+	store Store,
+	capacity int,
+	window time.Duration,
+) *TokenBucket {
 	refillRate := float64(capacity) / window.Seconds()
 
 	return &TokenBucket{
-		buckets: make(map[string]*Bucket),
-
+		store:      store,
 		capacity:   float64(capacity),
 		refillRate: refillRate,
 	}
 }
 
-func (tb *TokenBucket) getBucket(key string) *Bucket {
-	bucket, exists := tb.buckets[key]
-	if !exists {
+func (tb *TokenBucket) getBucket(key string) (*Bucket, error) {
+	bucket, err := tb.store.Get(key)
+	if err != nil {
+		return nil, err
+	}
+
+	if bucket == nil {
 		bucket = &Bucket{
 			Tokens:     tb.capacity,
 			LastRefill: time.Now(),
 		}
-		tb.buckets[key] = bucket
+
+		if err := tb.store.Save(key, bucket); err != nil {
+			return nil, err
+		}
 	}
 
-	return bucket
+	return bucket, nil
 }
 
 func (tb *TokenBucket) refill(bucket *Bucket) {
@@ -63,17 +79,23 @@ func (tb *TokenBucket) consume(bucket *Bucket) bool {
 }
 
 func (tb *TokenBucket) Allow(ctx context.Context, key string) (*Result, error) {
-	// ctx will be used later in the Redis implementation.
-	_ = ctx
+	_ = ctx // Used later
 
 	tb.mu.Lock()
 	defer tb.mu.Unlock()
 
-	bucket := tb.getBucket(key)
+	bucket, err := tb.getBucket(key)
+	if err != nil {
+		return nil, err
+	}
 
 	tb.refill(bucket)
 
 	allowed := tb.consume(bucket)
+
+	if err := tb.store.Save(key, bucket); err != nil {
+		return nil, err
+	}
 
 	result := &Result{
 		Allowed:    allowed,
@@ -82,7 +104,6 @@ func (tb *TokenBucket) Allow(ctx context.Context, key string) (*Result, error) {
 	}
 
 	if !allowed {
-		// Number of seconds until one token becomes available.
 		missingTokens := 1 - bucket.Tokens
 		result.RetryAfter = int64(missingTokens / tb.refillRate)
 	}

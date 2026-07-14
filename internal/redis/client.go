@@ -8,7 +8,7 @@ import (
 )
 
 type Client struct {
-	rdb *goredis.Client
+	RDB *goredis.Client // <-- Exported so other packages can use it
 }
 
 func New(addr string) *Client {
@@ -21,14 +21,14 @@ func New(addr string) *Client {
 	})
 
 	return &Client{
-		rdb: rdb,
+		RDB: rdb,
 	}
 }
 
 func (c *Client) Ping(ctx context.Context) error {
-	return c.rdb.Ping(ctx).Err()
+	return c.RDB.Ping(ctx).Err()
 }
 
 func (c *Client) Close() error {
-	return c.rdb.Close()
+	return c.RDB.Close()
 }

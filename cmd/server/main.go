@@ -14,6 +14,7 @@ import (
 	"distributed-rate-limiter/internal/limiter"
 	"distributed-rate-limiter/internal/redis"
 	"distributed-rate-limiter/internal/server"
+	"distributed-rate-limiter/internal/storage"
 )
 
 func main() {
@@ -35,8 +36,12 @@ func main() {
 	log.Println("✅ Connected to Redis")
 	defer redisClient.Close()
 
-	// Initialize the Token Bucket and Rate Limiter Middleware
+	// Initialize the Redis Store using our connected client
+	redisStore := storage.NewRedisStore(redisClient)
+
+	// Initialize the Token Bucket with the Redis Store injected
 	tokenBucket := limiter.NewTokenBucket(
+		redisStore,
 		cfg.DefaultRateLimit,
 		cfg.RateLimitWindow,
 	)
