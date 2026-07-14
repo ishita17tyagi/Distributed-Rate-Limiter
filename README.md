@@ -18,6 +18,24 @@ Atomic Lua-scripted token bucket enforcement, per-client policies, automatic in-
 
 ---
 
+## 🎯 Why This Project?
+
+Modern backend services rarely run on a single server.
+
+Once traffic is distributed across multiple application instances, traditional in-memory rate limiters become inconsistent because every instance maintains its own request counters.
+
+This project explores how production systems solve that problem by combining:
+
+- Shared state with Redis
+- Atomic request enforcement using Lua scripts
+- Middleware-based rate limiting
+- Graceful degradation during Redis outages
+- Multi-instance deployment behind Nginx
+
+The result is a production-inspired distributed rate limiter that demonstrates backend engineering concepts beyond a typical CRUD application.
+
+---
+
 ## Overview
 
 Most rate limiters start out simple: a counter in memory, incremented per request. That works fine — until the service is scaled horizontally. Once traffic is split across multiple instances behind a load balancer, each instance ends up enforcing its *own* limit, and a client can silently get several times the intended quota just by hitting different servers.
@@ -83,6 +101,15 @@ flowchart LR
 
 Every instance is stateless with respect to rate limiting — the authoritative token bucket for a given client lives in Redis, keyed by client identity. If Redis becomes unreachable, each instance can independently drop back to a local bucket to keep serving traffic.
 
+### 🏛️ Highlights
+
+- Stateless Go application instances
+- Redis as the single source of truth
+- Atomic Lua execution for consistency
+- Interface-driven architecture
+- Graceful degradation on dependency failures
+- Containerized multi-instance deployment
+
 ### Request Flow
 
 ```mermaid
@@ -122,7 +149,7 @@ Capacity and window resolution, Lua script internals, and the fallback decision 
 
 ---
 
-## 📸 Screenshots
+## 📸 Demo
 
 <p align="center"><b>Application Startup</b><br/>
 <img src="test images/2. Application Startup.png" width="800"/><br/>
