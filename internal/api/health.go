@@ -5,17 +5,17 @@ import (
 	"net/http"
 )
 
-func HealthCheck(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+type HealthResponse struct {
+	Status string `json:"status"`
+}
+
+func HealthHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
 
-	if err := json.NewEncoder(w).Encode(map[string]string{"status": "ok"}); err != nil {
-		http.Error(w, "failed to encode response", http.StatusInternalServerError)
-	}
+	json.NewEncoder(w).Encode(
+		HealthResponse{
+			Status: "ok",
+		},
+	)
 }
