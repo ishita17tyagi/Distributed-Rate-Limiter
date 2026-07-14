@@ -1,371 +1,275 @@
-# 🚦 Distributed Rate Limiter in Go
+<div align="center">
 
-> A production-inspired distributed rate limiter built with Go and Redis, designed to demonstrate backend engineering principles, distributed system concepts, and production-ready software design.
+# 🚦 Distributed Rate Limiter
 
----
+**A production-inspired, Redis-backed distributed rate limiter written in Go.**
 
-## 📖 Overview
+Atomic Lua-scripted token bucket enforcement, per-client policies, automatic in-memory failover, and a multi-instance Nginx-fronted Docker deployment.
 
-Modern distributed applications often run multiple instances of the same service behind a load balancer. While this improves scalability and availability, it also introduces a challenge:
+[![Go](https://img.shields.io/badge/Go-1.24-00ADD8?style=flat-square&logo=go&logoColor=white)](go.mod)
+[![Redis](https://img.shields.io/badge/Redis-7-DC382D?style=flat-square&logo=redis&logoColor=white)](internal/redis)
+[![Lua](https://img.shields.io/badge/Lua-Atomic%20Scripting-2C2D72?style=flat-square&logo=lua&logoColor=white)](internal/script/token_bucket.lua)
+[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=flat-square&logo=docker&logoColor=white)](docker-compose.yml)
+[![Nginx](https://img.shields.io/badge/Nginx-Load%20Balanced-009639?style=flat-square&logo=nginx&logoColor=white)](nginx.conf)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
+[![Distributed Systems](https://img.shields.io/badge/Distributed-Systems-informational?style=flat-square)](#-architecture)
 
-> **How do multiple servers enforce the same request limits for a user?**
-
-A simple in-memory rate limiter works only on a single server. Once multiple instances are introduced, each server maintains its own counters, leading to inconsistent rate limiting.
-
-This project solves that problem by implementing a **distributed rate limiter** where multiple application instances share rate-limiting state through **Redis**.
-
-The goal is not only to build a working service, but also to understand the design decisions, trade-offs, and engineering practices involved in building production systems.
-
----
-
-# 🎯 Project Goals
-
-This project aims to demonstrate:
-
-* Building production-inspired backend services in Go
-* Designing scalable distributed systems
-* Implementing efficient rate limiting algorithms
-* Writing clean, maintainable Go code
-* Following idiomatic Go project structure
-* Using Redis as distributed shared state
-* Containerizing applications with Docker
-* Writing comprehensive tests
-* Documenting architectural decisions
+</div>
 
 ---
 
-# ✨ Features
+## Overview
 
-### Core Features
+Most rate limiters start out simple: a counter in memory, incremented per request. That works fine — until the service is scaled horizontally. Once traffic is split across multiple instances behind a load balancer, each instance ends up enforcing its *own* limit, and a client can silently get several times the intended quota just by hitting different servers.
 
-* Distributed rate limiting
-* Redis-backed shared state
-* HTTP REST API
-* Configurable limits
-* Docker & Docker Compose support
-* Graceful shutdown
-* Health endpoints
-* Structured configuration
-* Production-style project layout
+**Distributed Rate Limiter** solves this by moving rate-limiting state out of the process and into Redis, where every application instance reads and writes against the same source of truth. The core enforcement logic — checking, refilling, and consuming tokens — runs as a single atomic Lua script inside Redis, eliminating the race conditions that plague naive "read-then-write" implementations under concurrent load.
+
+The project also treats Redis as a dependency that *can* fail. Rather than taking the whole service down when Redis is unreachable, the limiter can fall back to a local in-memory token bucket, trading strict global consistency for continued availability — a deliberate, configurable trade-off rather than an accident.
 
 ---
 
-### Engineering Features
+## 🚀 Start Here
 
-* Clean Architecture
-* Dependency Injection
-* Interface-based design
-* Configuration management
-* Error handling
-* Concurrency-safe implementation
-* Extensible architecture
-* Unit & Integration Tests
+New to this repository? Here's the recommended path:
+
+1. Skim [✨ Features](#-features) and [🏗 Architecture](#-architecture) below
+2. Look at the [📸 Screenshots](#-screenshots) to see it running end-to-end
+3. Read **[ENGINEERING_DECISIONS.md](ENGINEERING_DECISIONS.md)** for the request flow, algorithm rationale, and trade-offs
+4. Explore the source, starting at [`cmd/server/main.go`](cmd/server/main.go)
 
 ---
 
-# 🏗 Architecture
+## ✨ Features
 
-```
-                    Client
-                       │
-                       ▼
-              +----------------+
-              | Load Balancer  |
-              +----------------+
-                 │    │    │
-        ┌────────┘    │    └────────┐
-        ▼             ▼             ▼
-+---------------+ +---------------+ +---------------+
-| Go Instance A | | Go Instance B | | Go Instance C |
-+---------------+ +---------------+ +---------------+
-         │              │                 │
-         └──────────────┼─────────────────┘
-                        ▼
-                +----------------+
-                |     Redis      |
-                | Shared State   |
-                +----------------+
+**Distributed Systems**
+- Shared rate-limit state across instances via Redis
+- Atomic check-and-consume using a single Lua script (no read-modify-write races)
+- Per-instance automatic fallback to an in-memory limiter on Redis failure
+
+**Backend Engineering**
+- Middleware-based enforcement, decoupled from the limiter implementation via a `Limiter` interface
+- Per-client rate limit overrides, loaded from `client_limits.json` and resolved by `X-API-Key`
+- Environment-driven configuration with `.env` support
+
+**Reliability**
+- Configurable failure mode (`memory` fallback vs. fail-closed) when Redis is unavailable
+- Graceful shutdown on `SIGINT`/`SIGTERM` with a bounded drain window
+- Structured request logging (method, path, status, latency, remote address)
+
+**Developer Experience**
+- Minimal, idiomatic Go project layout (`cmd/`, `internal/`)
+- Clear separation between transport (`api`), policy (`limiter`), and persistence (`storage`, `redis`)
+
+**Containerization**
+- Multi-stage Docker build producing a small Alpine runtime image
+- Docker Compose stack: two app instances, Redis, and an Nginx load balancer
+
+---
+
+## 🏗 Architecture
+
+### System Overview
+
+```mermaid
+flowchart LR
+    Client([Client]) --> LB[Nginx<br/>Load Balancer]
+    LB --> A1[App Instance 1]
+    LB --> A2[App Instance 2]
+    A1 --> R[(Redis<br/>Shared State)]
+    A2 --> R
+    A1 -.fallback on failure.-> M1[[In-Memory<br/>Bucket]]
+    A2 -.fallback on failure.-> M2[[In-Memory<br/>Bucket]]
 ```
 
-Each server instance shares rate-limiting state through Redis, ensuring consistent enforcement regardless of which server handles a request.
+Every instance is stateless with respect to rate limiting — the authoritative token bucket for a given client lives in Redis, keyed by client identity. If Redis becomes unreachable, each instance can independently drop back to a local bucket to keep serving traffic.
+
+### Request Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant M as Rate Limit Middleware
+    participant L as Lua Script (Redis)
+    participant F as In-Memory Fallback
+
+    C->>M: HTTP Request (X-API-Key)
+    M->>M: Resolve capacity & window<br/>(client_limits.json or default)
+    M->>L: EVALSHA token_bucket.lua
+    alt Redis reachable
+        L-->>M: allowed, remaining, retry_after
+    else Redis error
+        M->>F: Allow(key, capacity, window)
+        F-->>M: allowed, remaining, retry_after
+    end
+    alt Allowed
+        M-->>C: 200 OK (request proceeds)
+    else Denied
+        M-->>C: 429 Too Many Requests<br/>Retry-After header
+    end
+```
+
+Capacity and window resolution, Lua script internals, and the fallback decision logic are covered step-by-step in **[ENGINEERING_DECISIONS.md](ENGINEERING_DECISIONS.md)**.
 
 ---
 
-# 📂 Project Structure
+## ⚡ Why This Project
 
-```
+- **Horizontal scaling** — the system is designed around the assumption that there will be more than one instance, not as an afterthought.
+- **Shared state, not shared memory** — Redis is used deliberately as the coordination point, rather than reaching for something like a distributed lock.
+- **Atomicity over locking** — the token bucket's read-refill-consume sequence executes as one Lua script inside Redis, avoiding the classic distributed race condition of two instances reading the same count before either writes back.
+- **Middleware, not a library call** — enforcement is wired in as standard HTTP middleware, so it composes with routing the way production systems actually do.
+- **Failure is a first-class case** — the failure mode (memory fallback vs. fail-closed) is explicit configuration, not an implicit default.
+
+---
+
+## 📸 Screenshots
+
+<p align="center"><b>Application Startup</b><br/>
+<img src="test images/2. Application Startup.png" width="800"/><br/>
+<sub>Configuration loading, Redis connection, and middleware initialization on boot.</sub>
+</p>
+
+<p align="center"><b>Health Endpoint</b><br/>
+<img src="test images/3. Health Endpoint.png" width="800"/><br/>
+<sub>The <code>/health</code> endpoint responding behind the logging and rate-limit middleware chain.</sub>
+</p>
+
+<p align="center"><b>Per-Client Rate Limiting</b><br/>
+<img src="test images/5. Free User.png" width="800"/>
+<img src="test images/6. Premium User Limit.png" width="800"/><br/>
+<sub>Free vs. premium clients enforced against different capacities defined in <code>client_limits.json</code>.</sub>
+</p>
+
+<p align="center"><b>Redis Data Verification</b><br/>
+<img src="test images/7. Redis Data Verification.png" width="800"/><br/>
+<sub>Token bucket state persisted as a Redis hash, written atomically by the Lua script.</sub>
+</p>
+
+<p align="center"><b>Graceful Shutdown</b><br/>
+<img src="test images/8. Graceful Shutdown.png" width="800"/><br/>
+<sub>In-flight requests draining cleanly on <code>SIGTERM</code> before the process exits.</sub>
+</p>
+
+---
+
+## 📂 Project Structure
+
+```text
 distributed-rate-limiter/
-
-├── cmd/
-│   └── server/
-│       └── main.go
-│
+├── cmd/server/        # Application entrypoint
 ├── internal/
-│   ├── api/
-│   ├── config/
-│   ├── limiter/
-│   ├── middleware/
-│   ├── storage/
-│   └── redis/
-│
-├── tests/
-│
-├── docs/
-│
+│   ├── api/            # HTTP router, rate-limit & logging middleware, health handler
+│   ├── config/          # Env + client_limits.json loading
+│   ├── limiter/          # Limiter interface, in-memory token bucket
+│   ├── logger/            # Structured logging (log/slog)
+│   ├── redis/              # Redis client wrapper
+│   ├── script/              # Embedded Lua script
+│   └── storage/              # Redis-backed and in-memory stores
+├── docs/                      # Algorithm notes
+├── docker-compose.yml         # Multi-instance + Nginx + Redis stack
 ├── Dockerfile
-├── docker-compose.yml
-├── Makefile
-├── go.mod
-├── .env.example
-└── README.md
+└── nginx.conf
 ```
 
----
-
-# 🛠 Tech Stack
-
-| Category             | Technology            |
-| -------------------- | --------------------- |
-| Language             | Go                    |
-| Cache / Shared State | Redis                 |
-| HTTP                 | net/http              |
-| Containerization     | Docker                |
-| Orchestration        | Docker Compose        |
-| Configuration        | Environment Variables |
-| Testing              | Go Testing Package    |
+Package-level responsibilities and how they interact are detailed in **[ENGINEERING_DECISIONS.md](ENGINEERING_DECISIONS.md)**.
 
 ---
 
-# 📚 Concepts Covered
+## ⚙️ Configuration
 
-This project explores several backend engineering topics:
-
-* Distributed Systems
-* Rate Limiting
-* Redis
-* HTTP Middleware
-* Interfaces
-* Dependency Injection
-* Concurrency
-* Atomic Operations
-* Docker
-* Configuration Management
-* Graceful Shutdown
-* Error Handling
-* Testing
-* Clean Architecture
-
----
-
-# 🚀 Rate Limiting Algorithm
-
-> **Initial Implementation:** Token Bucket
-
-The Token Bucket algorithm allows short bursts of traffic while maintaining a controlled average request rate.
-
-Future versions may include:
-
-* Fixed Window
-* Sliding Window Counter
-* Sliding Window Log
-* Leaky Bucket
-
-along with a comparison of their trade-offs.
-
----
-
-# ⚙ Configuration
-
-Configuration is managed using environment variables.
-
-Example:
+**`.env`** — global defaults, loaded on startup:
 
 ```env
 PORT=8080
-
 REDIS_ADDR=localhost:6379
-
+REDIS_FAILURE_MODE=memory   # "memory" (fallback) or fail-closed
 DEFAULT_RATE_LIMIT=10
-
 RATE_LIMIT_WINDOW=1m
 ```
 
+**`client_limits.json`** — per-client overrides, matched against the `X-API-Key` header:
+
+```json
+{
+  "free":    { "capacity": 10,  "window": "1m" },
+  "premium": { "capacity": 100, "window": "1m" }
+}
+```
+
+Requests without an `X-API-Key` header are limited under a shared `global` key using the default capacity and window.
+
 ---
 
-# 🚀 Running Locally
+## 🛠 Tech Stack
 
-## Prerequisites
-
-* Go 1.24+
-* Docker
-* Docker Compose
+| Layer               | Technology                  |
+|---------------------|------------------------------|
+| Language            | Go 1.24                      |
+| Shared State        | Redis 7                      |
+| Atomic Enforcement  | Lua (via `go-redis` scripting) |
+| Redis Client        | `github.com/redis/go-redis/v9` |
+| HTTP                | `net/http`                   |
+| Logging             | `log/slog`                   |
+| Load Balancing      | Nginx                        |
+| Containerization    | Docker, Docker Compose       |
 
 ---
 
-## Clone
+## 🚀 Quick Start
+
+### Docker Compose (recommended — full multi-instance stack)
 
 ```bash
 git clone https://github.com/<your-username>/distributed-rate-limiter.git
-
 cd distributed-rate-limiter
+docker compose up --build
 ```
 
----
+This brings up two app instances, Redis, and Nginx as a load balancer on `localhost:8080`.
 
-## Install Dependencies
+### Local (Go)
 
 ```bash
 go mod tidy
-```
-
----
-
-## Start Redis
-
-```bash
-docker compose up redis
-```
-
----
-
-## Start Application
-
-```bash
+docker compose up redis   # Redis only
 go run ./cmd/server
 ```
 
 ---
 
-## Or Run Everything
+## 📖 Engineering Decisions
 
-```bash
-docker compose up --build
-```
+The README stays focused on *what* this project is and *why* it exists. The *how* — request flow internals, Lua script design, failure-mode trade-offs, and architectural alternatives considered — lives in a dedicated document:
 
----
+➡️ **[ENGINEERING_DECISIONS.md](ENGINEERING_DECISIONS.md)**
 
-# 🧪 Testing
-
-Run unit tests:
-
-```bash
-go test ./...
-```
-
-Run with coverage:
-
-```bash
-go test ./... -cover
-```
+It covers:
+- Detailed request/response flow
+- Token bucket algorithm and Lua implementation
+- Redis failure handling trade-offs
+- Design decisions and alternatives considered
 
 ---
 
-# 📡 API
+## 🔮 Future Improvements
 
-## Health Check
-
-```
-GET /health
-```
-
-Response
-
-```json
-{
-    "status": "ok"
-}
-```
+- OpenTelemetry tracing across the middleware chain
+- Prometheus metrics and Grafana dashboards
+- Redis Cluster support for horizontal Redis scaling
+- Kubernetes deployment manifests
+- Dynamic (hot-reloadable) client limit configuration
+- Authentication on top of the existing API-key-based identification
+- Automated unit and integration test suite
+- Circuit breaker around the Redis client
 
 ---
 
-## Rate Limit Check *(planned)*
+## 🤝 Contributing
 
-```
-POST /v1/check
-```
-
-Request
-
-```json
-{
-    "key": "user123"
-}
-```
-
-Response
-
-```json
-{
-    "allowed": true,
-    "remaining": 8,
-    "retry_after": 0
-}
-```
+Issues, suggestions, and pull requests are welcome. If you'd like to propose a change to the architecture or algorithm, opening an issue first is a good way to start the discussion.
 
 ---
 
-# 🧪 Local Verification Checklist
+## 📄 License
 
-* [ ] Project builds successfully
-* [ ] Redis starts correctly
-* [ ] Application starts without errors
-* [ ] Health endpoint responds
-* [ ] Rate limiting works as expected
-* [ ] Multiple requests return HTTP 429 after limit
-* [ ] Docker Compose runs successfully
-* [ ] Unit tests pass
-
----
-
-# 📈 Future Improvements
-
-* Lua Script based atomic operations
-* Sliding Window implementation
-* Multiple rate-limiting algorithms
-* Prometheus metrics
-* Grafana dashboards
-* Request tracing
-* Distributed benchmarking
-* Kubernetes deployment
-* Horizontal scaling examples
-* Authentication
-* Per-user and per-endpoint limits
-* Configurable policies
-* Redis Cluster support
-* CI/CD with GitHub Actions
-
----
-
-# 📖 Learning Outcomes
-
-By building this project, I aim to gain a practical understanding of:
-
-* Designing distributed systems
-* Building production-grade backend services
-* Writing idiomatic Go
-* Designing clean APIs
-* Working with Redis
-* Applying software engineering best practices
-* Containerizing applications
-* Testing backend services
-* Making architectural trade-offs
-
----
-
-# 🤝 Contributing
-
-Contributions, suggestions, and discussions are welcome.
-
-If you have ideas for improving the architecture, implementation, or documentation, feel free to open an issue or submit a pull request.
-
----
-
-# 📄 License
-
-This project is licensed under the MIT License.
-
----
-
-## ⭐ Acknowledgements
-
-This project is inspired by the engineering challenges encountered while building scalable backend systems and payment infrastructure. It is intended as a learning-focused implementation that emphasizes clean design, production-inspired practices, and continuous improvement over feature completeness.
+Distributed under the MIT License.
