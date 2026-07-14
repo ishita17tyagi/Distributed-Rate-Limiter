@@ -160,3 +160,11 @@ None of these were oversights discovered too late — they were scoped out delib
 - **Metrics (Prometheus) and dashboards** — would turn the current log-based visibility into aggregate, queryable rate-limit and fallback statistics.
 - **Circuit breaker around the Redis client** — currently every request that hits a failing Redis attempts the call and pays its timeout before falling back; a circuit breaker would short-circuit that cost once a failure pattern is detected.
 - **Kubernetes deployment** — the Docker Compose setup demonstrates the multi-instance topology locally; a Kubernetes manifest (with a Service in front of multiple pods) would be the natural next step toward a realistic production deployment target.
+
+## Final Thoughts
+
+This project started as an implementation of the Token Bucket algorithm.
+
+It gradually became an exercise in distributed systems, consistency, failure handling, and production-inspired backend design.
+
+The algorithm itself turned out to be the easy part. The more interesting engineering challenges came from ensuring correctness across multiple application instances while designing for failures that inevitably occur in distributed systems.
