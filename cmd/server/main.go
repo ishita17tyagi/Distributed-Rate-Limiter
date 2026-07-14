@@ -40,7 +40,7 @@ func main() {
 	redisStore := storage.NewRedisStore(redisClient)
 
 	// Initialize the Token Bucket with the Redis Store injected
-	tokenBucket := limiter.NewTokenBucket(
+	tokenBucket := limiter.NewMemoryTokenBucket( // <-- Fixed: Removed the double (( parenthesis here
 		redisStore,
 		cfg.DefaultRateLimit,
 		cfg.RateLimitWindow,

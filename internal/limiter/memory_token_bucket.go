@@ -12,7 +12,7 @@ type Store interface {
 	Save(key string, bucket *Bucket) error
 }
 
-type TokenBucket struct {
+type MemoryTokenBucket struct {
 	mu sync.Mutex
 
 	store Store
@@ -21,21 +21,21 @@ type TokenBucket struct {
 	refillRate float64
 }
 
-func NewTokenBucket(
-	store Store,
+func NewMemoryTokenBucket(
+	store Store, // <-- Fixed: Changed from storage.BucketStore to Store
 	capacity int,
 	window time.Duration,
-) *TokenBucket {
+) *MemoryTokenBucket {
 	refillRate := float64(capacity) / window.Seconds()
 
-	return &TokenBucket{
+	return &MemoryTokenBucket{
 		store:      store,
 		capacity:   float64(capacity),
 		refillRate: refillRate,
 	}
 }
 
-func (tb *TokenBucket) getBucket(key string) (*Bucket, error) {
+func (tb *MemoryTokenBucket) getBucket(key string) (*Bucket, error) {
 	bucket, err := tb.store.Get(key)
 	if err != nil {
 		return nil, err
@@ -55,7 +55,7 @@ func (tb *TokenBucket) getBucket(key string) (*Bucket, error) {
 	return bucket, nil
 }
 
-func (tb *TokenBucket) refill(bucket *Bucket) {
+func (tb *MemoryTokenBucket) refill(bucket *Bucket) {
 	now := time.Now()
 
 	elapsed := now.Sub(bucket.LastRefill).Seconds()
@@ -69,7 +69,7 @@ func (tb *TokenBucket) refill(bucket *Bucket) {
 	bucket.LastRefill = now
 }
 
-func (tb *TokenBucket) consume(bucket *Bucket) bool {
+func (tb *MemoryTokenBucket) consume(bucket *Bucket) bool {
 	if bucket.Tokens >= 1 {
 		bucket.Tokens--
 		return true
@@ -78,7 +78,7 @@ func (tb *TokenBucket) consume(bucket *Bucket) bool {
 	return false
 }
 
-func (tb *TokenBucket) Allow(ctx context.Context, key string) (*Result, error) {
+func (tb *MemoryTokenBucket) Allow(ctx context.Context, key string) (*Result, error) {
 	_ = ctx // Used later
 
 	tb.mu.Lock()
