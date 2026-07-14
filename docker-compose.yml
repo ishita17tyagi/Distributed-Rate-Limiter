@@ -1,3 +1,5 @@
+version: "3.9"
+
 services:
   app:
     build: .
@@ -6,9 +8,16 @@ services:
     ports:
       - "${PORT:-8080}:${PORT:-8080}"
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy # Ensures the app waits until Redis passes the healthcheck
 
   redis:
     image: redis:7-alpine
+    container_name: distributed-rate-limiter-redis
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5

@@ -7,6 +7,7 @@ import (
 
 type HealthResponse struct {
 	Status string `json:"status"`
+	Redis  string `json:"redis"`
 }
 
 func HealthHandler(w http.ResponseWriter, r *http.Request) {
@@ -16,6 +17,7 @@ func HealthHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(
 		HealthResponse{
 			Status: "ok",
+			Redis:  "connected",
 		},
 	)
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"distributed-rate-limiter/internal/config"
+	"distributed-rate-limiter/internal/redis"
 	"distributed-rate-limiter/internal/server"
 )
 
@@ -18,6 +19,19 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	redisClient := redis.New(cfg.RedisAddr)
+
+	// Startup context for Redis connection
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := redisClient.Ping(ctx); err != nil {
+		log.Fatalf("Redis connection failed: %v", err)
+	}
+
+	log.Println("✅ Connected to Redis")
+	defer redisClient.Close()
 
 	srv := server.New(cfg)
 
@@ -41,12 +55,12 @@ func main() {
 
 	log.Println("Shutdown signal received...")
 
-	// Give existing requests time to finish
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	// Give existing requests time to finish using a new context
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
 
 	// Gracefully stop the server
-	if err := srv.Shutdown(ctx); err != nil {
+	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Fatal(err)
 	}
 
