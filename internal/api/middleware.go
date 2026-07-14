@@ -1,43 +1,51 @@
 package api
 
 import (
-	"log"
 	"net/http"
-	"time"
+	"strconv"
+
+	"distributed-rate-limiter/internal/limiter"
 )
 
-type statusRecorder struct {
-	http.ResponseWriter
-	statusCode int
+type RateLimitMiddleware struct {
+	limiter limiter.Limiter
 }
 
-func (r *statusRecorder) WriteHeader(statusCode int) {
-	r.statusCode = statusCode
-	r.ResponseWriter.WriteHeader(statusCode)
-}
-
-func (r *statusRecorder) Write(body []byte) (int, error) {
-	if r.statusCode == 0 {
-		r.statusCode = http.StatusOK
+func NewRateLimitMiddleware(l limiter.Limiter) *RateLimitMiddleware {
+	return &RateLimitMiddleware{
+		limiter: l,
 	}
-
-	return r.ResponseWriter.Write(body)
 }
 
-func RequestLogger(next http.Handler) http.Handler {
+func (m *RateLimitMiddleware) Handler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		startedAt := time.Now()
-		recorder := &statusRecorder{ResponseWriter: w}
 
-		next.ServeHTTP(recorder, r)
+		// For now we'll identify everyone as the same user.
+		// Later we'll use IP or Authentication.
+		key := "global"
 
-		log.Printf(
-			"request method=%s path=%s status=%d duration=%s remote_addr=%s",
-			r.Method,
-			r.URL.Path,
-			recorder.statusCode,
-			time.Since(startedAt),
-			r.RemoteAddr,
-		)
+		result, err := m.limiter.Allow(r.Context(), key)
+		if err != nil {
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+
+		if !result.Allowed {
+
+			w.Header().Set(
+				"Retry-After",
+				strconv.FormatInt(result.RetryAfter, 10),
+			)
+
+			http.Error(
+				w,
+				"Rate limit exceeded",
+				http.StatusTooManyRequests,
+			)
+
+			return
+		}
+
+		next.ServeHTTP(w, r)
 	})
 }

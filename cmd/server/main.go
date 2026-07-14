@@ -9,7 +9,9 @@ import (
 	"syscall"
 	"time"
 
+	"distributed-rate-limiter/internal/api"
 	"distributed-rate-limiter/internal/config"
+	"distributed-rate-limiter/internal/limiter"
 	"distributed-rate-limiter/internal/redis"
 	"distributed-rate-limiter/internal/server"
 )
@@ -33,7 +35,19 @@ func main() {
 	log.Println("✅ Connected to Redis")
 	defer redisClient.Close()
 
-	srv := server.New(cfg)
+	// Initialize the Token Bucket and Rate Limiter Middleware
+	tokenBucket := limiter.NewTokenBucket(
+		cfg.DefaultRateLimit,
+		cfg.RateLimitWindow,
+	)
+
+	rateLimiter := api.NewRateLimitMiddleware(tokenBucket)
+
+	// Pass the middleware to the server
+	srv := server.New(
+		cfg,
+		rateLimiter,
+	)
 
 	// Start HTTP server in a goroutine
 	go func() {

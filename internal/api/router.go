@@ -1,11 +1,19 @@
 package api
 
-import "net/http"
+import (
+	"net/http"
+)
 
-func NewRouter() *http.ServeMux {
+func NewRouter(rateLimiter *RateLimitMiddleware) *http.ServeMux {
+
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/health", HealthHandler)
+	mux.Handle(
+		"/health",
+		rateLimiter.Handler(
+			http.HandlerFunc(HealthHandler),
+		),
+	)
 
 	return mux
 }

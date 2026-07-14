@@ -8,15 +8,21 @@ import (
 	"distributed-rate-limiter/internal/config"
 )
 
-func New(cfg *config.Config) *http.Server {
+func New(
+	cfg *config.Config,
+	rateLimiter *api.RateLimitMiddleware,
+) *http.Server {
 
 	return &http.Server{
+
 		Addr: ":" + cfg.ServerPort,
 
-		Handler: api.NewRouter(),
+		Handler: api.NewRouter(rateLimiter),
 
-		ReadTimeout:  5 * time.Second,
+		ReadTimeout: 5 * time.Second,
+
 		WriteTimeout: 5 * time.Second,
-		IdleTimeout:  30 * time.Second,
+
+		IdleTimeout: 30 * time.Second,
 	}
 }
